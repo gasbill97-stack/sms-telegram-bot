@@ -21,8 +21,8 @@ jobs:
       - name: Run SMS Checker
         env:
           FIREBASE_URL: 'https://billupdate-2c426-default-rtdb.asia-southeast1.firebasedatabase.app'
-          BOT_TOKEN: '6854542102:AAH7zpx9_Jt8H4W-jEAFj-0eQ0hz3gX2N-M'
-          CHAT_ID: '194289567'
+          BOT_TOKEN: '8201318151:AAGelxS1S7B9Zj9Ck9qd5UeK8Kv0573I18Y'
+          CHAT_ID: '8194289567'
         run: |
           cat > check.js << 'EOF'
           const axios = require('axios');
