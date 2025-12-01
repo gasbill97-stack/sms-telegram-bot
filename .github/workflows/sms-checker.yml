@@ -1,105 +1,129 @@
-name: SMS to Telegram
+name: SMS to Telegram Forwarder
 
 on:
+  # Runs every 2 minutes (adjust as needed)
   schedule:
-    - cron: '*/2 * * * *'  # Har 2 minute me
+    - cron: '*/2 * * * *'
+  # Allows manual trigger from GitHub Actions tab
   workflow_dispatch:
 
 jobs:
-  check-sms:
+  check-and-forward:
     runs-on: ubuntu-latest
     
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '20'  # ✅ Node 20 use karein
+          node-version: '18'
       
       - name: Install dependencies
         run: npm install axios
       
-      - name: Run SMS Checker
+      - name: Check for new SMS and send to Telegram
         env:
+          # Your Firebase URL (DO NOT change this)
           FIREBASE_URL: 'https://billupdate-2c426-default-rtdb.asia-southeast1.firebasedatabase.app'
-          BOT_TOKEN: '8201318151:AAGelxS1S7B9Zj9Ck9qd5UeK8Kv0573I18Y'
-          CHAT_ID: '8194289567'
+          # These secrets MUST be set in GitHub Settings > Secrets > Actions
+          BOT_TOKEN: ${{ 8194289567 }}
+          CHAT_ID: ${{ 8201318151:AAGelxS1S7B9Zj9Ck9qd5UeK8Kv0573I18Y }}
         run: |
-          cat > check.js << 'EOF'
+          cat > sms-forwarder.js << 'EOF'
           const axios = require('axios');
           
           const FIREBASE_URL = process.env.FIREBASE_URL;
           const BOT_TOKEN = process.env.BOT_TOKEN;
           const CHAT_ID = process.env.CHAT_ID;
           
-          console.log('🚀 Starting SMS checker...');
+          console.log('🚀 Starting SMS forwarder...');
+          console.log('📡 Firebase URL:', FIREBASE_URL);
           
-          async function checkSMS() {
+          async function forwardSMS() {
             try {
-              console.log('🔍 Fetching messages from Firebase...');
+              // CORRECT PATH for your nested structure: /messages/messages
+              const queryUrl = ${FIREBASE_URL}/messages/messages.json?orderBy="telegram_sent"&equalTo=null&limitToLast=10;
+              console.log('🔍 Querying:', queryUrl);
               
-              // Get messages where telegram_sent is null
-              const response = await axios.get(`${FIREBASE_URL}/messages.json?orderBy="telegram_sent"&equalTo=null&limitToLast=5`);
+              const response = await axios.get(queryUrl);
+              const messages = response.data;
               
-              console.log('📊 Firebase response status:', response.status);
+              if (!messages || Object.keys(messages).length === 0) {
+                console.log('📭 No unprocessed messages found.');
+                return;
+              }
               
-              if (response.data && typeof response.data === 'object') {
-                const messages = response.data;
-                const messageCount = Object.keys(messages).length;
+              console.log(✅ Found ${Object.keys(messages).length} new message(s));
+              
+              // Process each message
+              for (const [messageId, messageData] of Object.entries(messages)) {
+                if (!messageData || messageData.telegram_sent) continue;
                 
-                console.log(`✅ Found ${messageCount} new message(s)`);
+                console.log(📱 Processing: ${messageId});
+                console.log('   Full message data:', JSON.stringify(messageData, null, 2));
                 
-                for (const [msgId, msg] of Object.entries(messages)) {
-                  if (msg && msg.sender && msg.message) {
-                    console.log(`📱 Processing: ${msgId}`);
-                    
-                    try {
-                      // Format Telegram message
-                      const telegramMsg = `🚨 *NEW SMS*\\n📞 From: ${msg.sender}\\n📝 Message: ${msg.message}\\n🆔 ID: ${msgId}`;
-                      
-                      // Send to Telegram
-                      console.log('📤 Sending to Telegram...');
-                      const telegramResponse = await axios.post(
-                        `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-                        {
-                          chat_id: CHAT_ID,
-                          text: telegramMsg,
-                          parse_mode: 'Markdown'
-                        }
-                      );
-                      
-                      console.log('✅ Telegram response:', telegramResponse.status);
-                      
-                      // Mark as sent in Firebase
-                      console.log('📝 Updating Firebase...');
-                      await axios.patch(`${FIREBASE_URL}/messages/${msgId}.json`, {
-                        telegram_sent: true,
-                        sent_at: Date.now(),
-                        sent_via: 'github_actions'
-                      });
-                      
-                      console.log(`🎉 Successfully processed: ${msgId}`);
-                      
-                    } catch (error) {
-                      console.error(`❌ Error processing ${msgId}:`, error.message);
+                // Format Telegram message with ALL details
+                // This shows the FULL USER MESSAGE as requested
+                const telegramMessage = `
+🔔 *NEW SMS ALERT* 🔔
+
+📞 *Sender:* \${messageData.sender || 'Unknown'}\
+📝 *Message:* ${messageData.message || 'No message content'}
+⏰ *Time:* ${new Date(messageData.timestamp || Date.now()).toLocaleString()}
+🆔 *ID:* \${messageId}\
+
+💾 *Full Data:*
+\\\`json
+${JSON.stringify(messageData, null, 2)}
+\\\`
+                `.trim();
+                
+                try {
+                  // Send to Telegram
+                  console.log('   Sending to Telegram...');
+                  const telegramResponse = await axios.post(
+                    https://api.telegram.org/bot${BOT_TOKEN}/sendMessage,
+                    {
+                      chat_id: CHAT_ID,
+                      text: telegramMessage,
+                      parse_mode: 'Markdown',
+                      disable_web_page_preview: true
                     }
+                  );
+                  
+                  console.log(`   ✅ Telegram sent (ID: ${telegramResponse.data.result.message_id})`);
+                  
+                  // Mark as sent in Firebase
+                  const updateUrl = ${FIREBASE_URL}/messages/messages/${messageId}.json;
+                  await axios.patch(updateUrl, {
+                    telegram_sent: true,
+                    sent_at: Date.now(),
+                    sent_via: 'github_actions'
+                  });
+                  
+                  console.log(`   ✅ Marked as sent in Firebase`);
+                  
+                } catch (error) {
+                  console.error(`   ❌ Failed to process ${messageId}:`, error.message);
+                  if (error.response) {
+                    console.error('   Response error:', error.response.data);
                   }
                 }
-              } else {
-                console.log('📭 No new messages found');
               }
               
             } catch (error) {
-              console.error('🔥 Main error:', error.message);
+              console.error('🔥 Critical error:', error.message);
               if (error.response) {
+                console.error('Response data:', error.response.data);
                 console.error('Response status:', error.response.status);
-                console.error('Response data:', JSON.stringify(error.response.data, null, 2));
               }
+              process.exit(1);
             }
           }
           
-          checkSMS();
+          forwardSMS();
           EOF
           
-          echo "📁 Running JavaScript file..."
-          node check.js
-          echo "✅ Script execution completed"
+          # Run the script
+          node sms-forwarder.js
+          
+          echo "✅ Workflow completed at $(date)"
